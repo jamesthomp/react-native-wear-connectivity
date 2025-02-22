@@ -1,6 +1,10 @@
 package com.wearconnectivity;
 
 import androidx.annotation.NonNull;
+import android.util.Log;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import com.facebook.common.logging.FLog;
 import com.facebook.react.bridge.Callback;
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
@@ -16,8 +20,6 @@ import java.util.List;
 import com.google.android.gms.common.GoogleApiAvailability;
 
 public class WearConnectivityModule extends WearConnectivitySpec {
-
-  private static ReactApplicationContext reactContext;
   public static final String NAME = "WearConnectivity";
   private static final String TAG = "react-native-wear-connectivity ";
   private final WearConnectivityMessageClient messageClient;
@@ -61,33 +63,7 @@ public class WearConnectivityModule extends WearConnectivitySpec {
    */
   @ReactMethod
   public void sendMessage(ReadableMap messageData, Callback replyCb, Callback errorCb) {
-    List<Node> connectedNodes = retrieveNodes(errorCb);
-    if (connectedNodes != null && !connectedNodes.isEmpty()) {
-      messageClient.sendMessage(messageData, connectedNodes, replyCb, errorCb);
-    } else {
-      errorCb.invoke(NO_NODES_FOUND);
-    }
-  }
-
-  private List<Node> retrieveNodes(Callback errorCb) {
-    try {
-      int result = GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(getReactContext());
-      ConnectionResult connectionResult = new ConnectionResult(result);
-      if (!connectionResult.isSuccess()) {
-        errorCb.invoke( MISSING_GOOGLE_PLAY_SERVICES + connectionResult.getErrorMessage());
-        return null;
-      }
-      NodeClient nodeClient = Wearable.getNodeClient(getReactContext());
-      try {
-        Tasks.await(GoogleApiAvailability.getInstance().checkApiAvailability(nodeClient));
-      } catch (Exception e) {
-        errorCb.invoke(INSTALL_GOOGLE_PLAY_WEARABLE + e);
-        return null;
-      }
-      return Tasks.await(nodeClient.getConnectedNodes());
-    } catch (Exception e) {
-      errorCb.invoke(RETRIEVE_NODES_FAILED + e);
-      return null;
+      messageClient.sendMessage(messageData, replyCb, errorCb);
     }
   }
 

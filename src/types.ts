@@ -1,5 +1,5 @@
 // Subscriptions
-export type EventType = 'message';
+export type EventType = 'message' | 'FileTransferEvent';
 type UnsubscribeFn = Function;
 type CallbackFunction = (event: any) => void;
 export type AddListener = (
