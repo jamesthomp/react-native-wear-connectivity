@@ -24,15 +24,9 @@ public class WearConnectivityModule extends WearConnectivitySpec {
   private static final String TAG = "react-native-wear-connectivity ";
   private final WearConnectivityMessageClient messageClient;
   private final WearConnectivityDataClient dataClient;
-  private boolean isListenerAdded = false;
-  private String NO_NODES_FOUND = TAG + "sendMessage failed. No connected nodes found.";
-  private String RETRIEVE_NODES_FAILED = TAG + "failed to retrieve nodes with error: ";
-  private String INSTALL_GOOGLE_PLAY_WEARABLE = "The Android mobile phone needs to install the Google Play Wear app. ";
-  private String MISSING_GOOGLE_PLAY_SERVICES = "GooglePlay Services not available.";
 
   WearConnectivityModule(ReactApplicationContext context) {
     super(context);
-    reactContext = context;
     messageClient = new WearConnectivityMessageClient(context);
     dataClient = new WearConnectivityDataClient(context);
   }
@@ -62,12 +56,12 @@ public class WearConnectivityModule extends WearConnectivitySpec {
    * If no nearby node is found, it invokes the error callback.
    */
   @ReactMethod
-  public void sendMessage(ReadableMap messageData, Callback replyCb, Callback errorCb) {
-      messageClient.sendMessage(messageData, replyCb, errorCb);
-    }
+  public void sendMessage(ReadableMap messageData, Callback errorCb) {
+    messageClient.sendMessage(messageData, errorCb);
   }
 
-  private static ReactApplicationContext getReactContext() {
-    return reactContext;
+  @ReactMethod
+  public void isConnected(Promise promise) {
+      promise.resolve(messageClient.isConnected());
   }
 }

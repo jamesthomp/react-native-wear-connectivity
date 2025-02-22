@@ -17,6 +17,7 @@ export type SendFile = (file: string, metadata: unknown) => Promise<any>;
 export interface Spec extends TurboModule {
   sendMessage: SendMessage;
   sendFile: SendFile;
+  isConnected: () => Promise<boolean>;
 }
 
 export default TurboModuleRegistry.getEnforcing<Spec>('WearConnectivity');

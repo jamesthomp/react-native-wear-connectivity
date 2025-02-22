@@ -35,5 +35,9 @@ const startFileTransfer: SendFile = (file, _metadata) => {
   return WearConnectivity.sendFile(file, _metadata);
 };
 
+export function isConnected(): Promise<boolean> {
+  return WearConnectivity.isConnected();
+}
+
 export { startFileTransfer, sendMessage, watchEvents, WearConnectivity };
 export type { ReplyCallback, ErrorCallback };

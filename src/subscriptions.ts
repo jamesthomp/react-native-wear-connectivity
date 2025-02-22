@@ -12,8 +12,8 @@ const _addListener: AddListener = (event, cb) => {
 
   switch (event) {
     case 'message':
-      break;
-    case 'FileTransferEvent':
+    case 'file-received':
+    case 'reachability':
       break;
     default:
       throw new Error(`Unknown watch event "${event}"`);

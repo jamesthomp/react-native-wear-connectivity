@@ -10,5 +10,5 @@ abstract class WearConnectivitySpec extends ReactContextBaseJavaModule {
     super(context);
   }
 
-  public abstract void sendMessage(ReadableMap messageData, Callback replyCb, Callback errCb);
+  public abstract void sendMessage(ReadableMap messageData, Callback errCb);
 }

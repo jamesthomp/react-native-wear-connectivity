@@ -7,6 +7,7 @@ import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.LifecycleEventListener;
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.WritableMap;
+import com.facebook.react.bridge.WritableArray;
 import com.google.android.gms.tasks.Task;
 import com.google.android.gms.wearable.Asset;
 import com.google.android.gms.wearable.DataClient;
@@ -146,8 +147,15 @@ public class WearConnectivityDataClient implements DataClient.OnDataChangedListe
             event.putNull("error");
         }
 
-        getReactContext().getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
-                .emit("FileTransferEvent", event);
+        if (type.equals("finished")) {
+            WritableArray array = Arguments.createArray();
+            array.pushMap(event);
+            getReactContext().getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
+                .emit("file-received", array);
+        } else {
+            getReactContext().getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
+                .emit("file-transfer", event);
+        }
     }
 
     /**
