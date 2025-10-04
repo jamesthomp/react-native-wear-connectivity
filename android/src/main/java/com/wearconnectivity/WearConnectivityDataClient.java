@@ -1,6 +1,7 @@
 package com.wearconnectivity;
 
 import android.webkit.MimeTypeMap;
+import android.net.Uri;
 
 import com.facebook.common.logging.FLog;
 import com.facebook.react.bridge.Arguments;
@@ -12,6 +13,7 @@ import com.google.android.gms.tasks.Task;
 import com.google.android.gms.wearable.Asset;
 import com.google.android.gms.wearable.DataClient;
 import com.google.android.gms.wearable.DataItem;
+import com.google.android.gms.wearable.DataItemBuffer;
 import com.google.android.gms.wearable.PutDataMapRequest;
 import com.google.android.gms.wearable.PutDataRequest;
 import com.google.android.gms.wearable.Wearable;
@@ -217,6 +219,52 @@ public class WearConnectivityDataClient implements DataClient.OnDataChangedListe
         fos.flush();
         fos.close();
         is.close();
+    }
+
+    /**
+     * Retrieves a list of files currently transferring in the DataClient.
+     * @param promise Promise to resolve the list of files or an error.
+     */
+    public void getTransferFiles(Promise promise) {
+        Task<DataItemBuffer> task = dataClient.getDataItems();
+        task.addOnSuccessListener(dataItems -> {
+            WritableArray fileList = Arguments.createArray();
+
+            for (DataItem item : dataItems) {
+                if (item.getUri().getPath().startsWith("/file_transfer")) {
+                    DataMap dataMap = DataMapItem.fromDataItem(item).getDataMap();
+                    WritableMap fileData = Arguments.createMap();
+                    fileData.putString("uri", item.getUri().toString());
+                    fileData.putString("fileName", dataMap.getString("fileName", "unknown_file"));
+                    fileData.putDouble("timestamp", dataMap.getLong("timestamp", 0));
+                    fileList.pushMap(fileData);
+                }
+            }
+
+            dataItems.release();
+            promise.resolve(fileList);
+        }).addOnFailureListener(e -> {
+            promise.reject("Failed to retrieve transfer files: " + e.getMessage());
+        });
+    }
+
+    /**
+     * Deletes a specific file from the DataClient.
+     * @param uri URI of the file to delete.
+     * @param promise Promise to resolve the result of the deletion.
+     */
+    public void deleteFileTransfer(String uri, Promise promise) {
+        Task<Integer> task = dataClient.deleteDataItems(Uri.parse(uri));
+        task.addOnSuccessListener(dataItems -> {
+            boolean fileDeleted = dataItems > 0;
+            if (fileDeleted) {
+                promise.resolve("deleted");
+            } else {
+                promise.reject("File not found");
+            }
+        }).addOnFailureListener(e -> {
+            promise.reject("Failed to delete file: " + e.getMessage());
+        });
     }
 
     @Override

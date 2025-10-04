@@ -64,4 +64,22 @@ public class WearConnectivityModule extends WearConnectivitySpec {
   public void isConnected(Promise promise) {
       promise.resolve(messageClient.isConnected());
   }
+
+  @ReactMethod
+  public void getTransferFiles(Promise promise) {
+    if (dataClient != null) {
+      dataClient.getTransferFiles(promise);
+    } else {
+      promise.reject("E_GET_FILES_FAILED", "Failed to retrieve transfer files");
+    }
+  }
+
+  @ReactMethod
+  public void deleteFileTransfer(String fileName, Promise promise) {
+    if (dataClient != null) {
+      dataClient.deleteFileTransfer(fileName, promise);
+    } else {
+      promise.reject("E_DELETE_FILE_FAILED", "Failed to delete file");
+    }
+  }
 }

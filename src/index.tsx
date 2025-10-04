@@ -35,5 +35,15 @@ export function isConnected(): Promise<boolean> {
   return WearConnectivity.isConnected();
 }
 
+export function getTransferFiles(): Promise<
+  Array<{ fileName: string; timestamp: number }>
+> {
+  return WearConnectivity.getTransferFiles();
+}
+
+export function deleteFileTransfer(uri: string): Promise<void> {
+  return WearConnectivity.deleteFileTransfer(uri);
+}
+
 export { startFileTransfer, sendMessage, watchEvents, WearConnectivity };
 export type { ErrorCallback };
