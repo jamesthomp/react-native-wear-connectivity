@@ -52,21 +52,19 @@ public class WearConnectivityDataClient implements DataClient.OnDataChangedListe
      */
     public void sendFile(String uri, Promise promise) {
         File file = new File(uri);
-        Asset asset = createAssetFromFile(file);
+        Asset asset = createAssetFromFile(file, promise);
         if (asset == null) {
-            FLog.w(TAG, "Failed to create asset from file.");
             return;
         }
         PutDataMapRequest dataMapRequest = PutDataMapRequest.create("/file_transfer");
+        dataMapRequest.getDataMap().putString("fileName", file.getName());
         dataMapRequest.getDataMap().putAsset("file", asset);
         dataMapRequest.getDataMap().putLong("timestamp", System.currentTimeMillis());
         PutDataRequest request = dataMapRequest.asPutDataRequest();
-        Task<DataItem> task = dataClient.putDataItem(request);
-        task.addOnSuccessListener(dataItem -> {
-            promise.resolve("File sent successfully via DataClient.");
-        }).addOnFailureListener(e -> {
-            promise.reject("File sending failed: " + e);
-        });
+        request.setUrgent();
+        dataClient.putDataItem(request)
+            .addOnSuccessListener(dataItem -> promise.resolve("File sent successfully."))
+            .addOnFailureListener(e -> promise.reject("File sending failed: " + e));
     }
 
     @Override
@@ -76,11 +74,7 @@ public class WearConnectivityDataClient implements DataClient.OnDataChangedListe
                 DataItem item = event.getDataItem();
                 if (item.getUri().getPath().equals("/file_transfer")) {
                     DataMap dataMap = DataMapItem.fromDataItem(item).getDataMap();
-                    // Extract metadata from the DataMap
-                    if (dataMap.containsKey("metadata")) {
-                        DataMap metadata = dataMap.getDataMap("metadata");
-                        fileName = metadata.getString("fileName", "unknown_file");
-                    }
+                    fileName = dataMap.getString("fileName", "unknown_file");
 
                     Asset asset = dataMap.getAsset("file");
                     if (asset != null) {
@@ -96,7 +90,7 @@ public class WearConnectivityDataClient implements DataClient.OnDataChangedListe
      * @param file the file to convert.
      * @return the resulting Asset, or null if an error occurred.
      */
-    private Asset createAssetFromFile(File file) {
+    private Asset createAssetFromFile(File file, Promise promise) {
         try {
             FileInputStream fileInputStream = new FileInputStream(file);
             byte[] byteArray = new byte[(int) file.length()];
@@ -104,7 +98,8 @@ public class WearConnectivityDataClient implements DataClient.OnDataChangedListe
             fileInputStream.close();
             return Asset.createFromBytes(byteArray);
         } catch (IOException e) {
-            e.printStackTrace();
+            FLog.e(TAG, "Error creating asset from file: " + e.getMessage(), e);
+            promise.reject("Error creating asset from file: " + e.getMessage());
             return null;
         }
     }

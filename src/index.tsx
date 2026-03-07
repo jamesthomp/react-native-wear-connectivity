@@ -27,8 +27,8 @@ const WearConnectivity = WearConnectivityModule
       }
     );
 
-const startFileTransfer: SendFile = (file, _metadata) => {
-  return WearConnectivity.sendFile(file, _metadata);
+const startFileTransfer: SendFile = (file) => {
+  return WearConnectivity.sendFile(file);
 };
 
 export function isConnected(): Promise<boolean> {

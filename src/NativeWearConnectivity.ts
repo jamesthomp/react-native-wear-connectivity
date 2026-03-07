@@ -5,7 +5,7 @@ import { TurboModuleRegistry } from 'react-native';
 export type Payload = {};
 export type ErrorCallback = (err: string) => void;
 export type SendMessage = (message: Payload, errCb: ErrorCallback) => void;
-export type SendFile = (file: string, metadata: unknown) => Promise<any>;
+export type SendFile = (file: string) => Promise<any>;
 export type GetTransferFiles = () => Promise<
   Array<{ uri: string; fileName: string; timestamp: number }>
 >;
