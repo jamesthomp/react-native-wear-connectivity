@@ -7,7 +7,7 @@ export type ErrorCallback = (err: string) => void;
 export type SendMessage = (message: Payload, errCb: ErrorCallback) => void;
 export type SendFile = (file: string) => Promise<any>;
 export type GetTransferFiles = () => Promise<
-  Array<{ uri: string; fileName: string; timestamp: number }>
+  Array<{ uri: string; fileName: string; url: string }>
 >;
 export type DeleteFileTransfer = (uri: string) => Promise<void>;
 

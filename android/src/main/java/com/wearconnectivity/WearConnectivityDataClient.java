@@ -3,13 +3,13 @@ package com.wearconnectivity;
 import android.webkit.MimeTypeMap;
 import android.net.Uri;
 
-import com.facebook.common.logging.FLog;
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.LifecycleEventListener;
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.bridge.WritableArray;
 import com.google.android.gms.tasks.Task;
+import com.google.android.gms.tasks.Tasks;
 import com.google.android.gms.wearable.Asset;
 import com.google.android.gms.wearable.DataClient;
 import com.google.android.gms.wearable.DataItem;
@@ -23,6 +23,9 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.Collections;
 
 import androidx.annotation.NonNull;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
@@ -32,38 +35,34 @@ import com.google.android.gms.wearable.DataMap;
 import com.google.android.gms.wearable.DataMapItem;
 
 public class WearConnectivityDataClient implements DataClient.OnDataChangedListener, LifecycleEventListener {
-    private static final String TAG = "WearConnectivityDataClient";
-    private DataClient dataClient;
-    private static ReactApplicationContext reactContext;
-    private String fileName = "unknown_file";
-    private long startTime;
-    private int totalBytes;
+    private final DataClient dataClient;
+    private final ReactApplicationContext reactContext;
+    
+    // Thread-safe set to prevent processing the same URI multiple times simultaneously
+    private final Set<String> processingUris = Collections.synchronizedSet(new HashSet<>());
 
     public WearConnectivityDataClient(ReactApplicationContext context) {
-        dataClient = Wearable.getDataClient(context);
-        reactContext = context;
-        dataClient.addListener(this);
-        context.addLifecycleEventListener(this);
+        this.reactContext = context;
+        this.dataClient = Wearable.getDataClient(context);
+        this.dataClient.addListener(this);
+        this.reactContext.addLifecycleEventListener(this);
     }
 
-    /**
-     * Sends a file (as an Asset) using the DataClient API.
-     * @param uri path to the file to be sent.
-     */
     public void sendFile(String uri, Promise promise) {
         File file = new File(uri);
         Asset asset = createAssetFromFile(file, promise);
-        if (asset == null) {
-            return;
-        }
-        PutDataMapRequest dataMapRequest = PutDataMapRequest.create("/file_transfer");
+        if (asset == null) return;
+
+        PutDataMapRequest dataMapRequest = PutDataMapRequest.createWithAutoAppendedId("/file_transfer");
         dataMapRequest.getDataMap().putString("fileName", file.getName());
         dataMapRequest.getDataMap().putAsset("file", asset);
         dataMapRequest.getDataMap().putLong("timestamp", System.currentTimeMillis());
+
         PutDataRequest request = dataMapRequest.asPutDataRequest();
         request.setUrgent();
+
         dataClient.putDataItem(request)
-            .addOnSuccessListener(dataItem -> promise.resolve("File sent successfully."))
+            .addOnSuccessListener(dataItem -> promise.resolve("File sent successfully: " + dataItem.getUri()))
             .addOnFailureListener(e -> promise.reject("File sending failed: " + e));
     }
 
@@ -72,208 +71,195 @@ public class WearConnectivityDataClient implements DataClient.OnDataChangedListe
         for (DataEvent event : dataEvents) {
             if (event.getType() == DataEvent.TYPE_CHANGED) {
                 DataItem item = event.getDataItem();
-                if (item.getUri().getPath().equals("/file_transfer")) {
-                    DataMap dataMap = DataMapItem.fromDataItem(item).getDataMap();
-                    fileName = dataMap.getString("fileName", "unknown_file");
+                Uri uri = item.getUri();
+                String path = uri.getPath();
 
+                if (path != null && path.startsWith("/file_transfer")) {
+                    final String uriString = uri.toString();
+
+                    if (processingUris.contains(uriString)) {
+                        continue;
+                    }
+
+                    processingUris.add(uriString);
+                    DataMap dataMap = DataMapItem.fromDataItem(item).getDataMap();
+                    final String fName = dataMap.getString("fileName", "unknown_file");
                     Asset asset = dataMap.getAsset("file");
+
                     if (asset != null) {
-                        receiveFile(asset);
+                        receiveFile(asset, fName, uriString);
+                    } else {
+                        processingUris.remove(uriString);
                     }
                 }
             }
         }
     }
 
-    /**
-     * Helper method to create an Asset from a file.
-     * @param file the file to convert.
-     * @return the resulting Asset, or null if an error occurred.
-     */
-    private Asset createAssetFromFile(File file, Promise promise) {
-        try {
-            FileInputStream fileInputStream = new FileInputStream(file);
-            byte[] byteArray = new byte[(int) file.length()];
-            fileInputStream.read(byteArray);
-            fileInputStream.close();
-            return Asset.createFromBytes(byteArray);
-        } catch (IOException e) {
-            FLog.e(TAG, "Error creating asset from file: " + e.getMessage(), e);
-            promise.reject("Error creating asset from file: " + e.getMessage());
-            return null;
+    private void receiveFile(Asset asset, final String fName, final String uriString) {
+        final long taskStartTime = System.currentTimeMillis();
+        
+        dataClient.getFdForAsset(asset)
+            .addOnSuccessListener(response -> {
+                new Thread(() -> {
+                    try (InputStream is = response.getInputStream()) {
+                        if (is == null) return;
+                        
+                        File file = new File(baseDirectory(), fName);
+                        saveFile(is, file);
+                        dispatchFileTransferEvent("finished", taskStartTime, file.length(), 0, 1.0f, 0, fName, file.getAbsolutePath(), null);
+                    } catch (IOException e) {
+                        dispatchFileTransferEvent("error", taskStartTime, 0, 0, 0, 0, fName, "", e.getMessage());
+                    } finally {
+                        processingUris.remove(uriString);
+                    }
+                }).start();
+            })
+            .addOnFailureListener(e -> {
+                processingUris.remove(uriString);
+                dispatchFileTransferEvent("error", taskStartTime, 0, 0, 0, 0, fName, "", e.toString());
+            });
+    }
+
+    private void saveFile(InputStream is, File file) throws IOException {
+        try (FileOutputStream fos = new FileOutputStream(file)) {
+            byte[] buffer = new byte[16384];
+            int bytesRead;
+            while ((bytesRead = is.read(buffer)) != -1) {
+                fos.write(buffer, 0, bytesRead);
+            }
+            fos.flush();
+            fos.getFD().sync();
         }
     }
 
-    private static ReactApplicationContext getReactContext() {
-        return reactContext;
-    }
-
-    private void receiveFile(Asset asset) {
-        Task<DataClient.GetFdForAssetResponse> task = dataClient.getFdForAsset(asset);
-        startTime = System.currentTimeMillis();
-
-        // Dispatch 'started' event
-        dispatchFileTransferEvent("started", startTime, 0, 0, 0, 0, fileName, null);
-        task.addOnSuccessListener(this::handleFileReceived)
-                .addOnFailureListener(this::handleFileReceiveError);
-    }
-
-
-    /**
-     * Dispatches a file transfer event to React Native.
-     */
     private void dispatchFileTransferEvent(
             String type, long startTime, long completedUnitCount, long estimatedTimeRemaining,
-            float fractionCompleted, long throughput, String fileName, String errorMessage) {
+            float fractionCompleted, long throughput, String fName, String filePath, String errorMessage) {
+
+        if (!reactContext.hasActiveReactInstance()) return;
+
         WritableMap event = Arguments.createMap();
-        String correctPath = "/data/data/" + getReactContext().getPackageName() + "/files/" + fileName;
-        FLog.w(TAG, "WatchFileReceived filePath: " + correctPath);
+
         event.putString("type", type);
-        event.putString("url", correctPath);
-        event.putString("id", fileName);
-        event.putDouble("startTime", startTime);
-        event.putDouble("endTime", type.equals("finished") ? System.currentTimeMillis() : 0);
-        event.putDouble("completedUnitCount", completedUnitCount);
-        event.putDouble("estimatedTimeRemaining", estimatedTimeRemaining);
-        event.putDouble("fractionCompleted", fractionCompleted);
-        event.putDouble("throughput", throughput);
-        event.putMap("metadata", getFileMetadata(fileName)); // Get metadata if available
+        event.putString("url", filePath);
+        event.putString("id", fName);
+        event.putDouble("startTime", (double) startTime);
+        event.putDouble("endTime", type.equals("finished") ? (double) System.currentTimeMillis() : 0);
+        event.putDouble("completedUnitCount", (double) completedUnitCount);
+        event.putDouble("estimatedTimeRemaining", (double) estimatedTimeRemaining);
+        event.putDouble("fractionCompleted", (double) fractionCompleted);
+        event.putDouble("throughput", (double) throughput);
+        event.putMap("metadata", getFileMetadata(fName));
+
         if (errorMessage != null) {
             event.putString("error", errorMessage);
         } else {
             event.putNull("error");
         }
 
+        DeviceEventManagerModule.RCTDeviceEventEmitter emitter = 
+            reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class);
+
         if (type.equals("finished")) {
             WritableArray array = Arguments.createArray();
             array.pushMap(event);
-            getReactContext().getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
-                .emit("file-received", array);
+            emitter.emit("file-received", array);
         } else {
-            getReactContext().getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
-                .emit("file-transfer", event);
+            emitter.emit("file-transfer", event);
         }
     }
 
-    /**
-     * Retrieves metadata associated with a file.
-     */
-    private WritableMap getFileMetadata(String fileName) {
+    private WritableMap getFileMetadata(String fName) {
         WritableMap metadata = Arguments.createMap();
-        metadata.putString("fileName", fileName);
-        metadata.putString("fileType", MimeTypeMap.getFileExtensionFromUrl(fileName));
+        metadata.putString("fileName", fName);
+        metadata.putString("fileType", MimeTypeMap.getFileExtensionFromUrl(fName));
         return metadata;
     }
 
-    private void handleFileReceived(DataClient.GetFdForAssetResponse response) {
-        InputStream is = response.getInputStream();
-        if (is == null) {
-            FLog.w(TAG, "WatchFileReceiveError: InputStream is null");
-            return;
-        }
+    private File baseDirectory() {
+        File dir = new File(reactContext.getFilesDir(), "FilesReceived");
+        dir.mkdirs();
+        return dir;
+    }
 
-        try {
-            File file = new File(getReactContext().getFilesDir(), fileName);
-            totalBytes = response.getInputStream().available();
-
-            saveFile(is, file);
-            dispatchFileTransferEvent("finished", startTime, totalBytes, 0, 1.0f, 0, fileName, null);
+    private Asset createAssetFromFile(File file, Promise promise) {
+        try (FileInputStream fileInputStream = new FileInputStream(file)) {
+            byte[] byteArray = new byte[(int) file.length()];
+            int bytesRead = fileInputStream.read(byteArray);
+            if (bytesRead != file.length()) {
+                throw new IOException("Could not read the entire file");
+            }
+            return Asset.createFromBytes(byteArray);
         } catch (IOException e) {
-            dispatchFileTransferEvent("error", startTime, 0, 0, 0, 0, fileName, e.getMessage());
+            promise.reject("Error creating asset from file: " + e.getMessage());
+            return null;
         }
     }
 
-    private void handleFileReceiveError(@NonNull Exception e) {
-        dispatchFileTransferEvent("error", startTime, 0, 0, 0, 0, fileName, e.toString());
-    }
-
-    private void dispatchEvent(String eventName, String body) {
-        getReactContext().getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
-                .emit(eventName, body);
-    }
-
-    private void saveFile(InputStream is, File file) throws IOException {
-        FileOutputStream fos = new FileOutputStream(file);
-        byte[] buffer = new byte[1024];
-        int bytesRead;
-        long completedBytes = 0;
-
-        while ((bytesRead = is.read(buffer)) != -1) {
-            fos.write(buffer, 0, bytesRead);
-            completedBytes += bytesRead;
-
-            // Calculate progress metrics
-            float fractionCompleted = (float) completedBytes / totalBytes;
-            long elapsedTime = System.currentTimeMillis() - startTime;
-            long estimatedTimeRemaining = (long) ((1 - fractionCompleted) * elapsedTime / fractionCompleted);
-            long throughput = completedBytes * 8 / (elapsedTime + 1); // Avoid division by zero
-
-            // Dispatch 'progress' event
-            dispatchFileTransferEvent("progress", startTime, completedBytes, estimatedTimeRemaining, fractionCompleted, throughput, fileName, null);
-        }
-        fos.flush();
-        fos.close();
-        is.close();
-    }
-
-    /**
-     * Retrieves a list of files currently transferring in the DataClient.
-     * @param promise Promise to resolve the list of files or an error.
-     */
     public void getTransferFiles(Promise promise) {
-        Task<DataItemBuffer> task = dataClient.getDataItems();
-        task.addOnSuccessListener(dataItems -> {
-            WritableArray fileList = Arguments.createArray();
-
-            for (DataItem item : dataItems) {
-                if (item.getUri().getPath().startsWith("/file_transfer")) {
-                    DataMap dataMap = DataMapItem.fromDataItem(item).getDataMap();
-                    WritableMap fileData = Arguments.createMap();
-                    fileData.putString("uri", item.getUri().toString());
-                    fileData.putString("fileName", dataMap.getString("fileName", "unknown_file"));
-                    fileData.putDouble("timestamp", dataMap.getLong("timestamp", 0));
-                    fileList.pushMap(fileData);
+        new Thread(() -> {
+            try {
+                DataItemBuffer dataItems = Tasks.await(dataClient.getDataItems());
+                WritableArray fileList = Arguments.createArray();
+                for (DataItem item : dataItems) {
+                    if (item.getUri().getPath().startsWith("/file_transfer")) {
+                        DataMap dataMap = DataMapItem.fromDataItem(item).getDataMap();
+                        String fName = dataMap.getString("fileName", "unknown_file");
+                        Asset asset = dataMap.getAsset("file");
+                        File actualFile = new File(baseDirectory(), fName);
+                        if (!actualFile.exists() && asset != null) {
+                            try {
+                                Task<DataClient.GetFdForAssetResponse> fdTask = dataClient.getFdForAsset(asset);
+                                DataClient.GetFdForAssetResponse response = Tasks.await(fdTask);
+                                try (InputStream is = response.getInputStream()) {
+                                    if (is != null) {
+                                        saveFile(is, actualFile);
+                                    }
+                                }
+                            } catch (Exception e) {
+                                promise.reject("failed: " + e.getMessage());
+                                return;
+                            }
+                        }
+                        if (actualFile.exists()) {
+                            WritableMap fileData = Arguments.createMap();
+                            fileData.putString("uri", item.getUri().toString());
+                            fileData.putString("id", fName);
+                            fileData.putString("fileName", fName);
+                            fileData.putString("url", "file://" + actualFile.getAbsolutePath());
+                            fileList.pushMap(fileData);
+                        }
+                    }
                 }
-            }
+                dataItems.release();
+                promise.resolve(fileList);
 
-            dataItems.release();
-            promise.resolve(fileList);
-        }).addOnFailureListener(e -> {
-            promise.reject("Failed to retrieve transfer files: " + e.getMessage());
-        });
+            } catch (Exception e) {
+                promise.reject("Failed to retrieve transfer files: " + e.getMessage());
+            }
+        }).start();
     }
 
-    /**
-     * Deletes a specific file from the DataClient.
-     * @param uri URI of the file to delete.
-     * @param promise Promise to resolve the result of the deletion.
-     */
     public void deleteFileTransfer(String uri, Promise promise) {
-        Task<Integer> task = dataClient.deleteDataItems(Uri.parse(uri));
-        task.addOnSuccessListener(dataItems -> {
-            boolean fileDeleted = dataItems > 0;
-            if (fileDeleted) {
-                promise.resolve("deleted");
-            } else {
-                promise.reject("File not found");
-            }
-        }).addOnFailureListener(e -> {
-            promise.reject("Failed to delete file: " + e.getMessage());
-        });
+        dataClient.deleteDataItems(Uri.parse(uri))
+            .addOnSuccessListener(count -> {
+                if (count > 0) promise.resolve("deleted");
+                else promise.reject("File not found");
+            })
+            .addOnFailureListener(e -> promise.reject("Failed: " + e.getMessage()));
     }
 
-    @Override
-    public void onHostResume() {
-        // do nothing
-    }
-
-    @Override
-    public void onHostPause() {
-        // do nothing
-    }
+    @Override public void onHostResume() {}
+    @Override public void onHostPause() {}
 
     @Override
     public void onHostDestroy() {
-        dataClient.removeListener(this);
+        if (dataClient != null) {
+            dataClient.removeListener(this);
+        }
+        if (reactContext != null) {
+            reactContext.removeLifecycleEventListener(this);
+        }
     }
 }

@@ -36,7 +36,7 @@ export function isConnected(): Promise<boolean> {
 }
 
 export function getTransferFiles(): Promise<
-  Array<{ fileName: string; timestamp: number }>
+  Array<{ uri: string; fileName: string; url: string }>
 > {
   return WearConnectivity.getTransferFiles();
 }
