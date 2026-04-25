@@ -2,6 +2,7 @@ package com.wearconnectivity;
 
 import android.webkit.MimeTypeMap;
 import android.net.Uri;
+import android.os.ParcelFileDescriptor;
 
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.LifecycleEventListener;
@@ -50,8 +51,14 @@ public class WearConnectivityDataClient implements DataClient.OnDataChangedListe
 
     public void sendFile(String uri, Promise promise) {
         File file = new File(uri);
-        Asset asset = createAssetFromFile(file, promise);
-        if (asset == null) return;
+        Asset asset;
+        try {
+            ParcelFileDescriptor pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY);
+            asset = Asset.createFromFd(pfd);
+        } catch (IOException e) {
+            promise.reject("Error creating asset from file: " + e.getMessage());
+            return;
+        }
 
         PutDataMapRequest dataMapRequest = PutDataMapRequest.createWithAutoAppendedId("/file_transfer");
         dataMapRequest.getDataMap().putString("fileName", file.getName());
@@ -181,20 +188,6 @@ public class WearConnectivityDataClient implements DataClient.OnDataChangedListe
         File dir = new File(reactContext.getFilesDir(), "FilesReceived");
         dir.mkdirs();
         return dir;
-    }
-
-    private Asset createAssetFromFile(File file, Promise promise) {
-        try (FileInputStream fileInputStream = new FileInputStream(file)) {
-            byte[] byteArray = new byte[(int) file.length()];
-            int bytesRead = fileInputStream.read(byteArray);
-            if (bytesRead != file.length()) {
-                throw new IOException("Could not read the entire file");
-            }
-            return Asset.createFromBytes(byteArray);
-        } catch (IOException e) {
-            promise.reject("Error creating asset from file: " + e.getMessage());
-            return null;
-        }
     }
 
     public void getTransferFiles(Promise promise) {
