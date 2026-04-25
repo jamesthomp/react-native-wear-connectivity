@@ -43,9 +43,9 @@ public class WearConnectivityModule extends WearConnectivitySpec {
    * @param promise
    */
   @ReactMethod
-  public void sendFile(String filePath, Promise promise) {
+  public void sendFile(String filePath, ReadableMap options, Promise promise) {
     if (dataClient != null) {
-      dataClient.sendFile(filePath, promise);
+      dataClient.sendFile(filePath, options, promise);
     } else {
       promise.reject("E_SEND_FAILED", "Failed to send file");
     }

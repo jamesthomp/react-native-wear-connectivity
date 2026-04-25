@@ -7,6 +7,7 @@ import android.os.ParcelFileDescriptor;
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.LifecycleEventListener;
 import com.facebook.react.bridge.Promise;
+import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.bridge.WritableArray;
 import com.google.android.gms.tasks.Task;
@@ -27,6 +28,8 @@ import java.io.InputStream;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.Collections;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.GZIPOutputStream;
 
 import androidx.annotation.NonNull;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
@@ -49,11 +52,21 @@ public class WearConnectivityDataClient implements DataClient.OnDataChangedListe
         this.reactContext.addLifecycleEventListener(this);
     }
 
-    public void sendFile(String uri, Promise promise) {
+    public void sendFile(String uri, ReadableMap options, Promise promise) {
         File file = new File(uri);
+        boolean shouldCompress = options.hasKey("compress") && options.getBoolean("compress");
+
+        final File fileToUpload;
+        try {
+            fileToUpload = prepareFileToUpload(file, shouldCompress);
+        } catch (IOException e) {
+            promise.reject("Error", "Failed to prepare file: " + e.getMessage());
+            return;
+        }
+
         Asset asset;
         try {
-            ParcelFileDescriptor pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY);
+            ParcelFileDescriptor pfd = ParcelFileDescriptor.open(fileToUpload, ParcelFileDescriptor.MODE_READ_ONLY);
             asset = Asset.createFromFd(pfd);
         } catch (IOException e) {
             promise.reject("Error creating asset from file: " + e.getMessage());
@@ -64,13 +77,46 @@ public class WearConnectivityDataClient implements DataClient.OnDataChangedListe
         dataMapRequest.getDataMap().putString("fileName", file.getName());
         dataMapRequest.getDataMap().putAsset("file", asset);
         dataMapRequest.getDataMap().putLong("timestamp", System.currentTimeMillis());
+        dataMapRequest.getDataMap().putBoolean("isCompressed", shouldCompress);
 
         PutDataRequest request = dataMapRequest.asPutDataRequest();
         request.setUrgent();
 
         dataClient.putDataItem(request)
-            .addOnSuccessListener(dataItem -> promise.resolve("File sent successfully: " + dataItem.getUri()))
-            .addOnFailureListener(e -> promise.reject("File sending failed: " + e));
+            .addOnSuccessListener(dataItem -> {
+                if (shouldCompress) {
+                    fileToUpload.delete();
+                }
+                promise.resolve("File sent successfully: " + dataItem.getUri());
+            })
+            .addOnFailureListener(e -> {
+                if (shouldCompress) {
+                    fileToUpload.delete();
+                }
+                promise.reject("File sending failed: " + e);
+            });
+    }
+
+    private File prepareFileToUpload(File file, boolean shouldCompress) throws IOException {
+        if (shouldCompress) {
+            File tempFile = File.createTempFile("compressed", ".gz", reactContext.getCacheDir());
+            compressFile(file, tempFile);
+            return tempFile;
+        }
+        return file;
+    }
+
+    private void compressFile(File source, File destination) throws IOException {
+        try (FileInputStream fis = new FileInputStream(source);
+             FileOutputStream fos = new FileOutputStream(destination);
+             GZIPOutputStream gzos = new GZIPOutputStream(fos)) {
+            byte[] buffer = new byte[16384];
+            int len;
+            while ((len = fis.read(buffer)) > 0) {
+                gzos.write(buffer, 0, len);
+            }
+            gzos.finish();
+        }
     }
 
     @Override
@@ -92,9 +138,10 @@ public class WearConnectivityDataClient implements DataClient.OnDataChangedListe
                     DataMap dataMap = DataMapItem.fromDataItem(item).getDataMap();
                     final String fName = dataMap.getString("fileName", "unknown_file");
                     Asset asset = dataMap.getAsset("file");
+                    final boolean isCompressed = dataMap.getBoolean("isCompressed", false);
 
                     if (asset != null) {
-                        receiveFile(asset, fName, uriString);
+                        receiveFile(asset, fName, uriString, isCompressed);
                     } else {
                         processingUris.remove(uriString);
                     }
@@ -103,7 +150,7 @@ public class WearConnectivityDataClient implements DataClient.OnDataChangedListe
         }
     }
 
-    private void receiveFile(Asset asset, final String fName, final String uriString) {
+    private void receiveFile(Asset asset, final String fName, final String uriString, final boolean isCompressed) {
         final long taskStartTime = System.currentTimeMillis();
         
         dataClient.getFdForAsset(asset)
@@ -112,8 +159,13 @@ public class WearConnectivityDataClient implements DataClient.OnDataChangedListe
                     try (InputStream is = response.getInputStream()) {
                         if (is == null) return;
                         
+                        InputStream finalIs = is;
+                        if (isCompressed) {
+                            finalIs = new GZIPInputStream(is);
+                        }
+
                         File file = new File(baseDirectory(), fName);
-                        saveFile(is, file);
+                        saveFile(finalIs, file);
                         dispatchFileTransferEvent("finished", taskStartTime, file.length(), 0, 1.0f, 0, fName, file.getAbsolutePath(), null);
                     } catch (IOException e) {
                         dispatchFileTransferEvent("error", taskStartTime, 0, 0, 0, 0, fName, "", e.getMessage());
@@ -200,6 +252,7 @@ public class WearConnectivityDataClient implements DataClient.OnDataChangedListe
                         DataMap dataMap = DataMapItem.fromDataItem(item).getDataMap();
                         String fName = dataMap.getString("fileName", "unknown_file");
                         Asset asset = dataMap.getAsset("file");
+                        boolean isCompressed = dataMap.getBoolean("isCompressed", false);
                         File actualFile = new File(baseDirectory(), fName);
                         if (!actualFile.exists() && asset != null) {
                             try {
@@ -207,7 +260,11 @@ public class WearConnectivityDataClient implements DataClient.OnDataChangedListe
                                 DataClient.GetFdForAssetResponse response = Tasks.await(fdTask);
                                 try (InputStream is = response.getInputStream()) {
                                     if (is != null) {
-                                        saveFile(is, actualFile);
+                                        InputStream finalIs = is;
+                                        if (isCompressed) {
+                                            finalIs = new GZIPInputStream(is);
+                                        }
+                                        saveFile(finalIs, actualFile);
                                     }
                                 }
                             } catch (Exception e) {

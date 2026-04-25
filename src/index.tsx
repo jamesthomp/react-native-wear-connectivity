@@ -27,8 +27,8 @@ const WearConnectivity = WearConnectivityModule
       }
     );
 
-const startFileTransfer: SendFile = (file) => {
-  return WearConnectivity.sendFile(file);
+const sendFile: SendFile = (file, options = {}) => {
+  return WearConnectivity.sendFile(file, options);
 };
 
 export function isConnected(): Promise<boolean> {
@@ -45,5 +45,5 @@ export function deleteFileTransfer(uri: string): Promise<void> {
   return WearConnectivity.deleteFileTransfer(uri);
 }
 
-export { startFileTransfer, sendMessage, watchEvents, WearConnectivity };
+export { sendFile, sendMessage, watchEvents, WearConnectivity };
 export type { ErrorCallback };
